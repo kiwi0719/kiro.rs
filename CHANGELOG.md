@@ -1,5 +1,10 @@
 # Changelog
 
+## [v1.1.30] - 2026-05-08
+
+### Fixed
+- **Docker 构建使用 pnpm install --ignore-scripts 绕过 pnpm 10 ERR_PNPM_IGNORED_BUILDS** — 在 Docker 构建阶段改用 `pnpm install --ignore-scripts`，绕过 pnpm 10 的 `ERR_PNPM_IGNORED_BUILDS` 报错，保证前端依赖可正常安装并完成构建 (`Dockerfile`)
+
 ## [v1.1.29] - 2026-05-08
 
 ### Fixed
