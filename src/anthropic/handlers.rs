@@ -154,6 +154,22 @@ fn is_no_credentials_error(err: &Error) -> bool {
     s.contains("没有可用的凭据")
 }
 
+/// 检查是否为"所有凭据均处于冷却/速率限制"错误，并提取建议的 retry_after 秒数。
+fn is_all_credentials_cooling_down_error(err: &Error) -> (bool, Option<u64>) {
+    let s = err.to_string();
+    if !s.contains("所有凭据均处于冷却/速率限制") {
+        return (false, None);
+    }
+    // 提取 retry_after_secs=N
+    let retry = s.split("retry_after_secs=").nth(1).and_then(|rest| {
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        rest[..end].parse::<u64>().ok()
+    });
+    (true, retry)
+}
+
 /// 网络错误关键字（is_transient_upstream_error 和 is_network_error 共用）
 const NETWORK_ERROR_PATTERNS: &[&str] = &[
     "error sending request",
@@ -469,6 +485,28 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
             Json(ErrorResponse::new(
                 "service_unavailable",
                 "No credentials available. Please add or enable credentials via Admin API or credentials.json.",
+            )),
+        )
+            .into_response();
+    }
+
+    let (cooling, retry_after) = is_all_credentials_cooling_down_error(&err);
+    if cooling {
+        let secs = retry_after.unwrap_or(60);
+        tracing::warn!(
+            error = %err,
+            retry_after_secs = secs,
+            "所有凭据临时冷却，返回 429 + Retry-After"
+        );
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, secs.to_string())],
+            Json(ErrorResponse::new(
+                "rate_limit_error",
+                format!(
+                    "All credentials are temporarily cooling down. Retry after {}s.",
+                    secs
+                ),
             )),
         )
             .into_response();
@@ -1911,6 +1949,37 @@ mod tests {
 
         let err = anyhow::anyhow!("没有可用的凭据（可用: 0/0），请添加或启用凭据后重试");
         assert!(!is_quota_exhausted_error(&err));
+    }
+
+    #[test]
+    fn test_is_all_credentials_cooling_down_error_matches_and_parses() {
+        let err = anyhow::anyhow!(
+            "所有凭据均处于冷却/速率限制（retry_after_secs=120，原因：cooldown，来自凭据 #3）"
+        );
+        let (matched, retry) = is_all_credentials_cooling_down_error(&err);
+        assert!(matched);
+        assert_eq!(retry, Some(120));
+    }
+
+    #[test]
+    fn test_is_all_credentials_cooling_down_error_rejects_unrelated() {
+        let err = anyhow::anyhow!("所有凭据已用尽");
+        let (matched, retry) = is_all_credentials_cooling_down_error(&err);
+        assert!(!matched);
+        assert_eq!(retry, None);
+
+        let err = anyhow::anyhow!("没有可用的凭据");
+        let (matched, retry) = is_all_credentials_cooling_down_error(&err);
+        assert!(!matched);
+        assert_eq!(retry, None);
+    }
+
+    #[test]
+    fn test_is_all_credentials_cooling_down_error_missing_secs_returns_none() {
+        let err = anyhow::anyhow!("所有凭据均处于冷却/速率限制（无 retry_after 信息）");
+        let (matched, retry) = is_all_credentials_cooling_down_error(&err);
+        assert!(matched);
+        assert_eq!(retry, None);
     }
 
     #[test]

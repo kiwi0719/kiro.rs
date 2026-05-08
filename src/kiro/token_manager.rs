@@ -755,6 +755,11 @@ const GLOBAL_DISABLE_RECOVERY_MINUTES: i64 = 5;
 /// 统计数据持久化防抖间隔
 const STATS_SAVE_DEBOUNCE: StdDuration = StdDuration::from_secs(30);
 
+/// 当所有可用凭据都进入冷却/速率限制时，如果最短等待时间不超过该阈值，
+/// 继续短睡重试（平滑瞬时抖动）；超过则立即 bail，由上层返回 429 + Retry-After，
+/// 避免 HTTP handler 挂到客户端超时。
+const ALL_CREDENTIALS_COOLDOWN_BAIL_THRESHOLD: StdDuration = StdDuration::from_secs(2);
+
 /// API 调用上下文
 ///
 /// 绑定特定凭据的调用上下文，确保 token、credentials 和 id 的一致性
@@ -1163,6 +1168,10 @@ impl MultiTokenManager {
         let mut min_wait: Option<std::time::Duration> = None;
         // 记录最短等待时间来自哪个凭据/原因，便于排障定位（冷却 vs 速率限制）。
         let mut min_wait_detail: Option<(u64, &'static str, std::time::Duration)> = None;
+        // 追踪仅因冷却/速率限制被跳过的凭据数量。
+        // 只有当“所有被跳过的凭据都是冷却/限流”时才触发 429 + Retry-After；
+        // 若混杂了 token 刷新失败等非临时性错误，应走常规 sleep-retry 路径保留原有语义。
+        let mut cooling_skipped: usize = 0;
 
         loop {
             // tried_ids 只会记录“本轮已经尝试过的可用凭据”（disabled 的不会被选中）。
@@ -1174,6 +1183,28 @@ impl MultiTokenManager {
             let enabled_total = self.available_count();
             if enabled_total > 0 && tried_ids.len() >= enabled_total {
                 if let Some(wait) = min_wait {
+                    // 仅当本轮所有被跳过的凭据都因冷却/限流时，才以 429 + Retry-After 快速返回；
+                    // 若混杂 token 刷新失败等非临时性错误，保留原有 sleep-retry 语义以避免吞掉真实错误。
+                    let all_due_to_cooling = cooling_skipped == tried_ids.len();
+                    if all_due_to_cooling && wait > ALL_CREDENTIALS_COOLDOWN_BAIL_THRESHOLD {
+                        self.debug_log_availability_diagnostics(
+                            "enabled_exhausted_bail_long_wait",
+                            &tried_ids,
+                            min_wait,
+                            min_wait_detail,
+                        );
+                        // Retry-After 语义要求向上取整，避免客户端在实际等待结束前提前重试。
+                        let secs = (wait.as_millis().div_ceil(1000) as u64).max(1);
+                        let (cid, source) = min_wait_detail
+                            .map(|(id, src, _)| (id, src))
+                            .unwrap_or((0, "unknown"));
+                        anyhow::bail!(
+                            "所有凭据均处于冷却/速率限制（retry_after_secs={}，原因：{}，来自凭据 #{}）",
+                            secs,
+                            source,
+                            cid
+                        );
+                    }
                     self.debug_log_availability_diagnostics(
                         "enabled_exhausted_sleep",
                         &tried_ids,
@@ -1182,6 +1213,7 @@ impl MultiTokenManager {
                     );
                     tokio::time::sleep(wait).await;
                     tried_ids.clear();
+                    cooling_skipped = 0;
                     min_wait = None;
                     min_wait_detail = None;
                     continue;
@@ -1201,6 +1233,25 @@ impl MultiTokenManager {
 
             if tried_ids.len() >= total {
                 if let Some(wait) = min_wait {
+                    let all_due_to_cooling = cooling_skipped == tried_ids.len();
+                    if all_due_to_cooling && wait > ALL_CREDENTIALS_COOLDOWN_BAIL_THRESHOLD {
+                        self.debug_log_availability_diagnostics(
+                            "total_exhausted_bail_long_wait",
+                            &tried_ids,
+                            min_wait,
+                            min_wait_detail,
+                        );
+                        let secs = (wait.as_millis().div_ceil(1000) as u64).max(1);
+                        let (cid, source) = min_wait_detail
+                            .map(|(id, src, _)| (id, src))
+                            .unwrap_or((0, "unknown"));
+                        anyhow::bail!(
+                            "所有凭据均处于冷却/速率限制（retry_after_secs={}，原因：{}，来自凭据 #{}）",
+                            secs,
+                            source,
+                            cid
+                        );
+                    }
                     self.debug_log_availability_diagnostics(
                         "total_exhausted_sleep",
                         &tried_ids,
@@ -1209,6 +1260,7 @@ impl MultiTokenManager {
                     );
                     tokio::time::sleep(wait).await;
                     tried_ids.clear();
+                    cooling_skipped = 0;
                     min_wait = None;
                     min_wait_detail = None;
                     continue;
@@ -1310,6 +1362,7 @@ impl MultiTokenManager {
                 }
                 min_wait = Some(min_wait.map(|w| w.min(remaining)).unwrap_or(remaining));
                 tried_ids.push(id);
+                cooling_skipped += 1;
                 continue;
             }
             if let Err(wait) = self.rate_limiter.try_acquire(id) {
@@ -1323,6 +1376,7 @@ impl MultiTokenManager {
                 }
                 min_wait = Some(min_wait.map(|w| w.min(wait)).unwrap_or(wait));
                 tried_ids.push(id);
+                cooling_skipped += 1;
                 continue;
             }
 
@@ -3446,6 +3500,119 @@ mod tests {
 
         assert_eq!(ctx.id, 1);
         assert!(elapsed >= std::time::Duration::from_millis(120));
+    }
+
+    #[tokio::test]
+    async fn test_acquire_context_bails_when_all_credentials_cooling_longer_than_threshold() {
+        let config = Config::default();
+        let mut cred = KiroCredentials::default();
+        cred.access_token = Some("t1".to_string());
+        cred.expires_at = Some((Utc::now() + Duration::hours(1)).to_rfc3339());
+
+        let manager = MultiTokenManager::new(config, vec![cred], None, None, false).unwrap();
+
+        // 设置 10 秒冷却，超过 2 秒阈值
+        manager.set_credential_cooldown_with_duration(
+            1,
+            CooldownReason::RateLimitExceeded,
+            Some(std::time::Duration::from_secs(10)),
+        );
+
+        let started = std::time::Instant::now();
+        let err = manager.acquire_context().await.err().unwrap();
+        let elapsed = started.elapsed();
+
+        // 应立即返回错误，不会长睡
+        assert!(elapsed < std::time::Duration::from_secs(2));
+        assert!(err.to_string().contains("所有凭据均处于冷却/速率限制"));
+        assert!(err.to_string().contains("retry_after_secs="));
+    }
+
+    #[tokio::test]
+    async fn test_acquire_context_bails_with_total_exhausted_branch() {
+        let config = Config::default();
+        let mut cred1 = KiroCredentials::default();
+        cred1.access_token = Some("t1".to_string());
+        cred1.expires_at = Some((Utc::now() + Duration::hours(1)).to_rfc3339());
+        cred1.priority = 0;
+
+        let mut cred2 = KiroCredentials::default();
+        cred2.access_token = Some("t2".to_string());
+        cred2.expires_at = Some((Utc::now() + Duration::hours(1)).to_rfc3339());
+        cred2.priority = 1; // 不同优先级，确保两个都被尝试
+
+        let manager =
+            MultiTokenManager::new(config, vec![cred1, cred2], None, None, false).unwrap();
+
+        // 两个凭据都设置长冷却
+        manager.set_credential_cooldown_with_duration(
+            1,
+            CooldownReason::RateLimitExceeded,
+            Some(std::time::Duration::from_secs(10)),
+        );
+        manager.set_credential_cooldown_with_duration(
+            2,
+            CooldownReason::ServerError,
+            Some(std::time::Duration::from_secs(10)),
+        );
+
+        let started = std::time::Instant::now();
+        let err = manager.acquire_context().await.err().unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(elapsed < std::time::Duration::from_secs(2));
+        assert!(err.to_string().contains("所有凭据均处于冷却/速率限制"));
+        assert!(err.to_string().contains("retry_after_secs="));
+    }
+
+    /// 混合故障场景：一个凭据长冷却，一个凭据 token 刷新失败（access_token/refresh_token 均缺失）。
+    /// 期望：不应快速返回 429（会错误吞掉真实的 token 刷新失败语义），应走常规 sleep 路径。
+    /// 用 tokio::time::timeout 做短超时，避免测试卡在长 sleep 循环里。
+    #[tokio::test]
+    async fn test_acquire_context_does_not_bail_429_on_mixed_failures() {
+        let config = Config::default();
+
+        let mut cred1 = KiroCredentials::default();
+        cred1.access_token = Some("t1".to_string());
+        cred1.expires_at = Some((Utc::now() + Duration::hours(1)).to_rfc3339());
+        cred1.priority = 0;
+
+        // 无 access_token / refresh_token / kiro_api_key —— try_ensure_token 会失败
+        let mut cred2 = KiroCredentials::default();
+        cred2.access_token = None;
+        cred2.refresh_token = None;
+        cred2.expires_at = None;
+        cred2.priority = 0;
+
+        let manager =
+            MultiTokenManager::new(config, vec![cred1, cred2], None, None, false).unwrap();
+
+        // cred1 长冷却（超过 2s 阈值），cred2 不设冷却但 token 刷新会失败
+        manager.set_credential_cooldown_with_duration(
+            1,
+            CooldownReason::RateLimitExceeded,
+            Some(std::time::Duration::from_secs(10)),
+        );
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            manager.acquire_context(),
+        )
+        .await;
+
+        match result {
+            Err(_timeout) => {
+                // 超时说明进入了 sleep 循环——正是期望的行为（未提前 bail 429）。
+            }
+            Ok(Ok(_)) => panic!("混合故障场景不应成功获取 context"),
+            Ok(Err(err)) => {
+                assert!(
+                    !err.to_string().contains("所有凭据均处于冷却/速率限制"),
+                    "混合故障场景不应 bail 429：{}",
+                    err
+                );
+            }
+        }
     }
 
     #[tokio::test]

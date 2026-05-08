@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **凭据全冷却时快速返回 429 + Retry-After** — `acquire_context()` 现在会在所有可用凭据均处于冷却/速率限制且最短等待超过 2 秒时立即 bail，由 handler 返回 `429 Too Many Requests` 并附带 `Retry-After` 头，避免 HTTP handler 无意义挂起至客户端超时；2 秒以内的短等待仍保留 sleep-retry 语义以吸收瞬时抖动 (`src/kiro/token_manager.rs`, `src/anthropic/handlers.rs`)
+
 ## [v1.1.26] - 2026-04-24
 
 ### Changed
