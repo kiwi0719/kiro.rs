@@ -124,7 +124,7 @@ impl CredentialsFile {
                 vec![cred]
             }
             CredentialsFile::Multiple(mut creds) => {
-                creds.sort_by_key(|c| c.priority);
+                creds.sort_by_key(|c| (c.priority, c.id.unwrap_or(0)));
                 for cred in &mut creds {
                     cred.canonicalize_auth_method();
                 }
@@ -320,6 +320,19 @@ mod tests {
         assert_eq!(list[0].refresh_token, Some("t2".to_string()));
         assert_eq!(list[1].refresh_token, Some("t3".to_string()));
         assert_eq!(list[2].refresh_token, Some("t1".to_string()));
+    }
+
+    #[test]
+    fn test_credentials_file_priority_ties_sort_by_id() {
+        let json = r#"[
+            {"id": 3, "refreshToken": "t3", "priority": 0},
+            {"id": 1, "refreshToken": "t1", "priority": 0},
+            {"id": 2, "refreshToken": "t2", "priority": 0}
+        ]"#;
+        let f: CredentialsFile = serde_json::from_str(json).unwrap();
+        let list = f.into_sorted_credentials();
+        let ids: Vec<u64> = list.into_iter().map(|c| c.id.unwrap()).collect();
+        assert_eq!(ids, vec![1, 2, 3]);
     }
 
     #[test]

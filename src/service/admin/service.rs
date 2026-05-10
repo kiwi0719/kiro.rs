@@ -74,7 +74,7 @@ impl AdminService {
             })
             .collect();
 
-        credentials.sort_by_key(|c| c.priority);
+        credentials.sort_by_key(|c| (c.priority, c.id));
 
         CredentialsStatusResponse {
             total: snapshot.total,

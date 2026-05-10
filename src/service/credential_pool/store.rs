@@ -186,12 +186,12 @@ impl CredentialStore {
         Ok(true)
     }
 
-    /// 将候选快照保存到磁盘（仅多格式），按 priority 排序。
+    /// 将候选快照保存到磁盘（仅多格式），按 priority/id 排序。
     fn save_candidate(&self, mut creds: Vec<Credential>) -> Result<bool, ConfigError> {
         if !self.is_multiple {
             return Ok(false);
         }
-        creds.sort_by_key(|c| c.priority);
+        creds.sort_by_key(|c| (c.priority, c.id.unwrap_or(0)));
         self.file.save(&creds, true)
     }
 
@@ -262,9 +262,9 @@ impl CredentialStore {
         if !self.is_multiple {
             return Ok(false);
         }
-        // 按 priority 排序后落盘（与原文件字段顺序一致）
+        // 按 priority/id 排序后落盘（与原文件字段顺序一致）
         let mut sorted: Vec<Credential> = self.inner.lock().values().cloned().collect();
-        sorted.sort_by_key(|c| c.priority);
+        sorted.sort_by_key(|c| (c.priority, c.id.unwrap_or(0)));
         self.file.save(&sorted, true)
     }
 }
@@ -297,6 +297,27 @@ mod tests {
         let resolver = Arc::new(MachineIdResolver::new());
         let (store, issues) = CredentialStore::load(file, config, resolver).unwrap();
         (store, issues, path)
+    }
+
+    fn tied_priority_credentials_json(ids: &[u64]) -> String {
+        let creds: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                serde_json::json!({
+                    "id": id,
+                    "refreshToken": format!("rt-{id}"),
+                    "authMethod": "social",
+                    "priority": 0,
+                })
+            })
+            .collect();
+        serde_json::to_string_pretty(&creds).unwrap()
+    }
+
+    fn credential_ids_in_file(path: &PathBuf) -> Vec<u64> {
+        let content = fs::read_to_string(path).unwrap();
+        let creds: Vec<Credential> = serde_json::from_str(&content).unwrap();
+        creds.into_iter().map(|c| c.id.unwrap()).collect()
     }
 
     #[test]
@@ -336,6 +357,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(store2.count(), initial + 1);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn set_disabled_persists_tied_priorities_in_id_order() {
+        let json = tied_priority_credentials_json(&[9, 3, 6, 1, 8, 2, 7, 4, 5]);
+        let (store, _issues, path) = make_store_from(&json, "disabled-stable-order");
+
+        store.set_disabled(6, true).unwrap();
+
+        assert_eq!(
+            credential_ids_in_file(&path),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn add_persists_tied_priorities_in_id_order() {
+        let json = tied_priority_credentials_json(&[9, 3, 6, 1, 8, 2, 7, 4, 5]);
+        let (store, _issues, path) = make_store_from(&json, "add-stable-order");
+
+        let new_id = store
+            .add(Credential {
+                refresh_token: Some("rt-10".to_string()),
+                auth_method: Some("social".to_string()),
+                priority: 0,
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(new_id, 10);
+        assert_eq!(
+            credential_ids_in_file(&path),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        );
         let _ = fs::remove_file(&path);
     }
 

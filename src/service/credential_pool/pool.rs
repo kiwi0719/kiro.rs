@@ -537,7 +537,7 @@ impl CredentialPool {
             .filter(|id| !state_map.get(id).map(|s| s.disabled).unwrap_or(false))
             .count();
 
-        let entries: Vec<AdminEntrySnapshot> = store_map
+        let mut entries: Vec<AdminEntrySnapshot> = store_map
             .iter()
             .map(|(id, cred)| {
                 let state = state_map.get(id).cloned().unwrap_or_default();
@@ -589,6 +589,7 @@ impl CredentialPool {
                 }
             })
             .collect();
+        entries.sort_by_key(|entry| (entry.priority, entry.id));
 
         AdminSnapshot {
             entries,
@@ -1450,6 +1451,16 @@ mod tests {
         let id3 = pool.acquire(None).await.unwrap().id;
         assert_eq!(id3, 3, "禁用 id=2 后应选剩余最低 id=3");
 
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn admin_snapshot_sorts_tied_priorities_by_id() {
+        let (pool, path) = pool_with_tied_priorities(9, MODE_PRIORITY, 0);
+        let snap = pool.admin_snapshot();
+        let ids: Vec<u64> = snap.entries.into_iter().map(|entry| entry.id).collect();
+
+        assert_eq!(ids, (1_u64..=9).collect::<Vec<_>>());
         let _ = fs::remove_file(&path);
     }
 
