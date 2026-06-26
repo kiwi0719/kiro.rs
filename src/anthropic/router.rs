@@ -1,5 +1,7 @@
 //! Anthropic API 路由配置
 
+use std::sync::{Arc, RwLock};
+
 use axum::{
     Router,
     extract::DefaultBodyLimit,
@@ -30,16 +32,16 @@ const MAX_BODY_SIZE: usize = 50 * 1024 * 1024;
 /// - `Authorization: Bearer <token>` header
 ///
 /// # 参数
-/// - `api_key`: API 密钥，用于验证客户端请求
+/// - `api_key`: 共享的 API 密钥句柄，用于验证客户端请求（支持运行时修改）
 /// - `kiro_provider`: 可选的 KiroProvider，用于调用上游 API
 
 /// 创建带有 KiroProvider 的 Anthropic API 路由
 pub fn create_router_with_provider(
-    api_key: impl Into<String>,
+    api_key: Arc<RwLock<String>>,
     kiro_provider: Option<KiroProvider>,
     extract_thinking: bool,
 ) -> Router {
-    let mut state = AppState::new(api_key, extract_thinking);
+    let mut state = AppState::with_shared_api_key(api_key, extract_thinking);
     if let Some(provider) = kiro_provider {
         state = state.with_kiro_provider(provider);
     }

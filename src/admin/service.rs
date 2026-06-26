@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::kiro::model::credentials::KiroCredentials;
 use crate::kiro::token_manager::MultiTokenManager;
+use crate::model::config::Config;
 
 use super::error::AdminServiceError;
 use super::types::{
@@ -38,6 +39,10 @@ pub struct AdminService {
     cache_path: Option<PathBuf>,
     /// 已注册的端点名称集合（用于 add_credential 校验）
     known_endpoints: HashSet<String>,
+    /// 客户端 API Key 的共享句柄（与 Anthropic 认证中间件共享，支持运行时修改）
+    client_api_key: Option<Arc<RwLock<String>>>,
+    /// Admin API Key 的共享句柄（与 Admin 认证中间件共享，支持运行时修改）
+    admin_api_key: Option<Arc<RwLock<String>>>,
 }
 
 impl AdminService {
@@ -56,7 +61,20 @@ impl AdminService {
             balance_cache: Mutex::new(balance_cache),
             cache_path,
             known_endpoints: known_endpoints.into_iter().collect(),
+            client_api_key: None,
+            admin_api_key: None,
         }
+    }
+
+    /// 注入共享的 API Key 句柄，使 Admin API 能在运行时修改密钥
+    pub fn with_shared_keys(
+        mut self,
+        client_api_key: Arc<RwLock<String>>,
+        admin_api_key: Arc<RwLock<String>>,
+    ) -> Self {
+        self.client_api_key = Some(client_api_key);
+        self.admin_api_key = Some(admin_api_key);
+        self
     }
 
     /// 获取所有凭据状态
@@ -297,6 +315,86 @@ impl AdminService {
             .map_err(|e| AdminServiceError::InternalError(e.to_string()))?;
 
         Ok(LoadBalancingModeResponse { mode: req.mode })
+    }
+
+    /// 生成一个随机的客户端 API Key（格式：sk-kiro-<32位十六进制>）
+    pub fn generate_client_api_key() -> String {
+        let hex: String = (0..32)
+            .map(|_| {
+                let n = fastrand::u8(0..16);
+                std::char::from_digit(n as u32, 16).unwrap()
+            })
+            .collect();
+        format!("sk-kiro-{hex}")
+    }
+
+    /// 修改客户端 API Key：持久化到 config.json 并即时更新运行时认证
+    pub fn update_client_api_key(&self, new_key: &str) -> Result<(), AdminServiceError> {
+        let new_key = new_key.trim();
+        if new_key.is_empty() {
+            return Err(AdminServiceError::InvalidCredential(
+                "API Key 不能为空".to_string(),
+            ));
+        }
+
+        self.persist_config_field(|config| config.api_key = Some(new_key.to_string()))?;
+
+        if let Some(handle) = &self.client_api_key {
+            if let Ok(mut guard) = handle.write() {
+                *guard = new_key.to_string();
+            }
+        }
+
+        tracing::info!("客户端 API Key 已更新");
+        Ok(())
+    }
+
+    /// 修改 Admin API Key：持久化到 config.json 并即时更新运行时认证
+    pub fn update_admin_api_key(&self, new_key: &str) -> Result<(), AdminServiceError> {
+        let new_key = new_key.trim();
+        if new_key.is_empty() {
+            return Err(AdminServiceError::InvalidCredential(
+                "Admin API Key 不能为空".to_string(),
+            ));
+        }
+
+        self.persist_config_field(|config| config.admin_api_key = Some(new_key.to_string()))?;
+
+        if let Some(handle) = &self.admin_api_key {
+            if let Ok(mut guard) = handle.write() {
+                *guard = new_key.to_string();
+            }
+        }
+
+        tracing::info!("Admin API Key 已更新");
+        Ok(())
+    }
+
+    /// 重新加载磁盘上的 config.json，应用修改后写回（参考 persist_load_balancing_mode）
+    fn persist_config_field(
+        &self,
+        apply: impl FnOnce(&mut Config),
+    ) -> Result<(), AdminServiceError> {
+        let config_path = self
+            .token_manager
+            .config()
+            .config_path()
+            .map(|p| p.to_path_buf())
+            .ok_or_else(|| {
+                AdminServiceError::InternalError(
+                    "配置文件路径未知，无法持久化修改".to_string(),
+                )
+            })?;
+
+        let mut config = Config::load(&config_path).map_err(|e| {
+            AdminServiceError::InternalError(format!("重新加载配置失败: {e}"))
+        })?;
+        apply(&mut config);
+        config
+            .save()
+            .map_err(|e| AdminServiceError::InternalError(format!("写入配置文件失败: {e}")))?;
+
+        Ok(())
     }
 
     /// 强制刷新指定凭据的 Token

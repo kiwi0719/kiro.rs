@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Trash2, RotateCcw, CheckCircle2 } from 'lucide-react'
+import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Trash2, RotateCcw, CheckCircle2, Settings, KeyRound } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
@@ -12,6 +12,8 @@ import { AddCredentialDialog } from '@/components/add-credential-dialog'
 import { BatchImportDialog } from '@/components/batch-import-dialog'
 import { KamImportDialog } from '@/components/kam-import-dialog'
 import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-dialog'
+import { AdminKeyDialog } from '@/components/admin-key-dialog'
+import { ClientKeyDialog } from '@/components/client-key-dialog'
 import { useCredentials, useDeleteCredential, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode } from '@/hooks/use-credentials'
 import { getCredentialBalance, forceRefreshToken } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
@@ -27,6 +29,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [addDialogOpen, setAddDialogOpen] = useState(false)
   const [batchImportDialogOpen, setBatchImportDialogOpen] = useState(false)
   const [kamImportDialogOpen, setKamImportDialogOpen] = useState(false)
+  const [adminKeyDialogOpen, setAdminKeyDialogOpen] = useState(false)
+  const [clientKeyDialogOpen, setClientKeyDialogOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [verifyDialogOpen, setVerifyDialogOpen] = useState(false)
   const [verifying, setVerifying] = useState(false)
@@ -560,6 +564,14 @@ export function Dashboard({ onLogout }: DashboardProps) {
             <Button variant="ghost" size="icon" onClick={handleRefresh}>
               <RefreshCw className="h-5 w-5" />
             </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setAdminKeyDialogOpen(true)}
+              title="修改管理员密码"
+            >
+              <Settings className="h-5 w-5" />
+            </Button>
             <Button variant="ghost" size="icon" onClick={handleLogout}>
               <LogOut className="h-5 w-5" />
             </Button>
@@ -608,19 +620,19 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
         {/* 凭据列表 */}
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <h2 className="text-xl font-semibold">凭据管理</h2>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-4 shrink-0">
+              <h2 className="text-xl font-semibold whitespace-nowrap">凭据管理</h2>
               {selectedIds.size > 0 && (
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary">已选择 {selectedIds.size} 个</Badge>
-                  <Button onClick={deselectAll} size="sm" variant="ghost">
+                <div className="flex items-center gap-2 shrink-0">
+                  <Badge variant="secondary" className="whitespace-nowrap">已选择 {selectedIds.size} 个</Badge>
+                  <Button onClick={deselectAll} size="sm" variant="ghost" className="whitespace-nowrap">
                     取消选择
                   </Button>
                 </div>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 [&_button]:whitespace-nowrap [&_button]:shrink-0">
               {selectedIds.size > 0 && (
                 <>
                   <Button onClick={handleBatchVerify} size="sm" variant="outline">
@@ -689,6 +701,10 @@ export function Dashboard({ onLogout }: DashboardProps) {
               <Button onClick={() => setBatchImportDialogOpen(true)} size="sm" variant="outline">
                 <Upload className="h-4 w-4 mr-2" />
                 批量导入
+              </Button>
+              <Button onClick={() => setClientKeyDialogOpen(true)} size="sm" variant="outline">
+                <KeyRound className="h-4 w-4 mr-2" />
+                修改 API Key
               </Button>
               <Button onClick={() => setAddDialogOpen(true)} size="sm">
                 <Plus className="h-4 w-4 mr-2" />
@@ -781,6 +797,20 @@ export function Dashboard({ onLogout }: DashboardProps) {
         results={verifyResults}
         onCancel={handleCancelVerify}
       />
+
+      {/* 修改管理员密码 */}
+      <AdminKeyDialog
+        open={adminKeyDialogOpen}
+        onOpenChange={setAdminKeyDialogOpen}
+        onChanged={() => {
+          // 管理员密码已变更，安全起见要求重新登录
+          toast.info('管理员密码已修改，请重新登录')
+          handleLogout()
+        }}
+      />
+
+      {/* 修改客户端 API Key */}
+      <ClientKeyDialog open={clientKeyDialogOpen} onOpenChange={setClientKeyDialogOpen} />
     </div>
   )
 }

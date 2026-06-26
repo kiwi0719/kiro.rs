@@ -145,25 +145,26 @@ export function CredentialCard({
     <>
       <Card className={credential.isCurrent ? 'ring-2 ring-primary' : ''}>
         <CardHeader className="pb-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-start gap-2 min-w-0 flex-wrap">
               <Checkbox
                 checked={selected}
                 onCheckedChange={onToggleSelect}
+                className="mt-1 shrink-0"
               />
-              <CardTitle className="text-lg flex items-center gap-2">
-                {credential.email || `凭据 #${credential.id}`}
+              <CardTitle className="text-lg flex items-center gap-2 flex-wrap min-w-0">
+                <span className="break-all">{credential.email || `凭据 #${credential.id}`}</span>
                 {credential.isCurrent && (
-                  <Badge variant="success">当前</Badge>
+                  <Badge variant="success" className="whitespace-nowrap shrink-0">当前</Badge>
                 )}
                 {credential.disabled && (
-                  <Badge variant="destructive">已禁用</Badge>
+                  <Badge variant="destructive" className="whitespace-nowrap shrink-0">已禁用</Badge>
                 )}
                 {credential.disabled && credential.disabledReason && (
-                  <Badge variant="outline">{credential.disabledReason}</Badge>
+                  <Badge variant="outline" className="whitespace-nowrap shrink-0">{credential.disabledReason}</Badge>
                 )}
                 {credential.authMethod && (
-                  <Badge variant="secondary">
+                  <Badge variant="secondary" className="whitespace-nowrap shrink-0">
                     {credential.authMethod === 'api_key' ? 'API Key' :
                      credential.authMethod === 'idc' ? 'IdC' :
                      credential.authMethod === 'social' ? 'Social' :
@@ -171,12 +172,12 @@ export function CredentialCard({
                   </Badge>
                 )}
                 {credential.endpoint && (
-                  <Badge variant="outline">{credential.endpoint}</Badge>
+                  <Badge variant="outline" className="whitespace-nowrap shrink-0">{credential.endpoint}</Badge>
                 )}
               </CardTitle>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">启用</span>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-sm text-muted-foreground whitespace-nowrap">启用</span>
               <Switch
                 checked={!credential.disabled}
                 onCheckedChange={handleToggleDisabled}
@@ -261,7 +262,7 @@ export function CredentialCard({
             {credential.maskedApiKey && (
               <div className="col-span-2">
                 <span className="text-muted-foreground">API Key：</span>
-                <span className="font-mono font-medium">{credential.maskedApiKey}</span>
+                <span className="font-mono font-medium break-all">{credential.maskedApiKey}</span>
               </div>
             )}
             <div className="col-span-2">
