@@ -196,6 +196,26 @@ pub struct SetLoadBalancingModeRequest {
     pub mode: String,
 }
 
+// ============ API Key 管理 ============
+
+/// 修改 API Key 请求（客户端 Key 或 Admin Key）
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateApiKeyRequest {
+    /// 新的 API Key
+    pub key: String,
+}
+
+/// 修改/生成客户端 API Key 的响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyResponse {
+    pub success: bool,
+    pub message: String,
+    /// 新的明文 API Key（仅在生成或修改成功时返回一次）
+    pub api_key: String,
+}
+
 // ============ 通用响应 ============
 
 /// 操作成功响应

@@ -9,8 +9,8 @@ use axum::{
 use super::{
     middleware::AdminState,
     types::{
-        AddCredentialRequest, SetDisabledRequest, SetLoadBalancingModeRequest, SetPriorityRequest,
-        SuccessResponse,
+        AddCredentialRequest, ApiKeyResponse, SetDisabledRequest, SetLoadBalancingModeRequest,
+        SetPriorityRequest, SuccessResponse, UpdateApiKeyRequest,
     },
 };
 
@@ -137,6 +137,50 @@ pub async fn set_load_balancing_mode(
 ) -> impl IntoResponse {
     match state.service.set_load_balancing_mode(payload) {
         Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// PUT /api/admin/config/admin-key
+/// 修改 Admin API Key（即时生效，旧 Key 立即失效）
+pub async fn update_admin_key(
+    State(state): State<AdminState>,
+    Json(payload): Json<UpdateApiKeyRequest>,
+) -> impl IntoResponse {
+    match state.service.update_admin_api_key(&payload.key) {
+        Ok(()) => Json(SuccessResponse::new("Admin API Key 已更新")).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// PUT /api/admin/config/client-key
+/// 修改客户端 API Key（即时生效）
+pub async fn update_client_key(
+    State(state): State<AdminState>,
+    Json(payload): Json<UpdateApiKeyRequest>,
+) -> impl IntoResponse {
+    match state.service.update_client_api_key(&payload.key) {
+        Ok(()) => Json(ApiKeyResponse {
+            success: true,
+            message: "客户端 API Key 已更新".to_string(),
+            api_key: payload.key.trim().to_string(),
+        })
+        .into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/config/client-key/generate
+/// 随机生成并应用一个新的客户端 API Key（即时生效）
+pub async fn generate_client_key(State(state): State<AdminState>) -> impl IntoResponse {
+    let new_key = crate::admin::AdminService::generate_client_api_key();
+    match state.service.update_client_api_key(&new_key) {
+        Ok(()) => Json(ApiKeyResponse {
+            success: true,
+            message: "已生成新的客户端 API Key".to_string(),
+            api_key: new_key,
+        })
+        .into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }

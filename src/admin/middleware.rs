@@ -1,6 +1,6 @@
 //! Admin API 中间件
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use axum::{
     body::Body,
@@ -17,16 +17,16 @@ use crate::common::auth;
 /// Admin API 共享状态
 #[derive(Clone)]
 pub struct AdminState {
-    /// Admin API 密钥
-    pub admin_api_key: String,
+    /// Admin API 密钥（使用 RwLock 包裹以支持运行时修改）
+    pub admin_api_key: Arc<RwLock<String>>,
     /// Admin 服务
     pub service: Arc<AdminService>,
 }
 
 impl AdminState {
-    pub fn new(admin_api_key: impl Into<String>, service: AdminService) -> Self {
+    pub fn new(admin_api_key: Arc<RwLock<String>>, service: AdminService) -> Self {
         Self {
-            admin_api_key: admin_api_key.into(),
+            admin_api_key,
             service: Arc::new(service),
         }
     }
@@ -38,13 +38,17 @@ pub async fn admin_auth_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    let api_key = auth::extract_api_key(&request);
+    let matched = match state.admin_api_key.read() {
+        Ok(key) => auth::extract_api_key(&request)
+            .map(|k| auth::constant_time_eq(&k, &key))
+            .unwrap_or(false),
+        Err(_) => false,
+    };
 
-    match api_key {
-        Some(key) if auth::constant_time_eq(&key, &state.admin_api_key) => next.run(request).await,
-        _ => {
-            let error = AdminErrorResponse::authentication_error();
-            (StatusCode::UNAUTHORIZED, Json(error)).into_response()
-        }
+    if matched {
+        next.run(request).await
+    } else {
+        let error = AdminErrorResponse::authentication_error();
+        (StatusCode::UNAUTHORIZED, Json(error)).into_response()
     }
 }
