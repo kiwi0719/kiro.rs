@@ -608,19 +608,19 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
         {/* 凭据列表 */}
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <h2 className="text-xl font-semibold">凭据管理</h2>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-4 shrink-0">
+              <h2 className="text-xl font-semibold whitespace-nowrap">凭据管理</h2>
               {selectedIds.size > 0 && (
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary">已选择 {selectedIds.size} 个</Badge>
-                  <Button onClick={deselectAll} size="sm" variant="ghost">
+                <div className="flex items-center gap-2 shrink-0">
+                  <Badge variant="secondary" className="whitespace-nowrap">已选择 {selectedIds.size} 个</Badge>
+                  <Button onClick={deselectAll} size="sm" variant="ghost" className="whitespace-nowrap">
                     取消选择
                   </Button>
                 </div>
               )}
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 [&_button]:whitespace-nowrap [&_button]:shrink-0">
               {selectedIds.size > 0 && (
                 <>
                   <Button onClick={handleBatchVerify} size="sm" variant="outline">
