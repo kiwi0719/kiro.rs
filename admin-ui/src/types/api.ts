@@ -46,6 +46,13 @@ export interface SuccessResponse {
   message: string
 }
 
+// 修改/生成 API Key 响应（含明文 key，仅返回一次）
+export interface ApiKeyResponse {
+  success: boolean
+  message: string
+  apiKey: string
+}
+
 // 错误响应
 export interface AdminErrorResponse {
   error: {

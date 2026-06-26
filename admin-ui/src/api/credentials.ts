@@ -8,10 +8,11 @@ import type {
   SetPriorityRequest,
   AddCredentialRequest,
   AddCredentialResponse,
+  ApiKeyResponse,
 } from '@/types/api'
 
 // 创建 axios 实例
-const api = axios.create({
+export const api = axios.create({
   baseURL: '/api/admin',
   headers: {
     'Content-Type': 'application/json',
@@ -102,5 +103,23 @@ export async function getLoadBalancingMode(): Promise<{ mode: 'priority' | 'bala
 // 设置负载均衡模式
 export async function setLoadBalancingMode(mode: 'priority' | 'balanced'): Promise<{ mode: 'priority' | 'balanced' }> {
   const { data } = await api.put<{ mode: 'priority' | 'balanced' }>('/config/load-balancing', { mode })
+  return data
+}
+
+// 修改 Admin API Key（即时生效，旧 Key 立即失效）
+export async function updateAdminKey(key: string): Promise<SuccessResponse> {
+  const { data } = await api.put<SuccessResponse>('/config/admin-key', { key })
+  return data
+}
+
+// 修改客户端 API Key（即时生效）
+export async function updateClientKey(key: string): Promise<ApiKeyResponse> {
+  const { data } = await api.put<ApiKeyResponse>('/config/client-key', { key })
+  return data
+}
+
+// 随机生成并应用新的客户端 API Key
+export async function generateClientKey(): Promise<ApiKeyResponse> {
+  const { data } = await api.post<ApiKeyResponse>('/config/client-key/generate')
   return data
 }
