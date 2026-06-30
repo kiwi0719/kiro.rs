@@ -1515,15 +1515,16 @@ mod tests {
         // Build via the typed converter structs so field order is owned by
         // Rust struct declaration (the path real requests take).
         use crate::kiro::model::requests::conversation::{
-            ConversationState, CurrentMessage, Message, UserInputMessage,
+            ConversationState, CurrentMessage, HistoryAssistantMessage, HistoryUserMessage,
+            Message, UserInputMessage,
         };
         let cur = CurrentMessage::new(
             UserInputMessage::new("hi", "claude-sonnet-4").with_origin("AI_EDITOR"),
         );
         let state = ConversationState::new("c1")
             .with_history(vec![
-                Message::user("h", "claude-sonnet-4"),
-                Message::assistant("ack"),
+                Message::User(HistoryUserMessage::new("h", "claude-sonnet-4")),
+                Message::Assistant(HistoryAssistantMessage::new("ack")),
             ])
             .with_current_message(cur)
             .with_chat_trigger_type("MANUAL")

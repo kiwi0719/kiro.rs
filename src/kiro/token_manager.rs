@@ -603,6 +603,10 @@ pub struct CredentialEntrySnapshot {
     pub expires_at: Option<String>,
     /// refreshToken 的 SHA-256 哈希（用于前端重复检测）
     pub refresh_token_hash: Option<String>,
+    /// kiroApiKey 的 SHA-256 哈希（用于前端重复检测）
+    pub api_key_hash: Option<String>,
+    /// kiroApiKey 的脱敏显示（如 ksk_***xxx）
+    pub masked_api_key: Option<String>,
     /// 用户邮箱（用于前端显示）
     pub email: Option<String>,
     /// 已持久化的订阅等级（页面刷新后可直接展示）
@@ -2434,6 +2438,15 @@ impl MultiTokenManager {
                         has_profile_arn: e.credentials.profile_arn.is_some(),
                         expires_at: e.credentials.expires_at.clone(),
                         refresh_token_hash: hash,
+                        api_key_hash: e.credentials.kiro_api_key.as_deref().map(sha256_hex),
+                        masked_api_key: e.credentials.kiro_api_key.as_deref().map(|k| {
+                            let len = k.len();
+                            if len <= 8 {
+                                format!("{}***", &k[..len.min(3)])
+                            } else {
+                                format!("{}***{}", &k[..4], &k[len - 4..])
+                            }
+                        }),
                         email: e.credentials.email.clone(),
                         subscription_title: e.credentials.subscription_title.clone(),
                         success_count: e.success_count,

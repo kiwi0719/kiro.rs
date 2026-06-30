@@ -1,7 +1,8 @@
 //! Admin API 中间件
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
+use parking_lot::RwLock;
 use axum::{
     body::Body,
     extract::State,
@@ -38,11 +39,11 @@ pub async fn admin_auth_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    let matched = match state.admin_api_key.read() {
-        Ok(key) => auth::extract_api_key(&request)
+    let matched = {
+        let key = state.admin_api_key.read();
+        auth::extract_api_key(&request)
             .map(|k| auth::constant_time_eq(&k, &key))
-            .unwrap_or(false),
-        Err(_) => false,
+            .unwrap_or(false)
     };
 
     if matched {
