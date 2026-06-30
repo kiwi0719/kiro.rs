@@ -15,18 +15,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import type { CredentialStatusItem, BalanceResponse } from '@/types/api'
+import type { CredentialStatusItem, CachedBalanceInfo, BalanceResponse } from '@/types/api'
 import {
   useSetDisabled,
   useSetPriority,
+  useSetRegion,
+  useSetEndpoint,
   useResetFailure,
-  useDeleteCredential,
   useForceRefreshToken,
+  useDeleteCredential,
 } from '@/hooks/use-credentials'
 
 interface CredentialCardProps {
   credential: CredentialStatusItem
-  onViewBalance: (id: number) => void
+  cachedBalance?: CachedBalanceInfo
+  onViewBalance: (id: number, forceRefresh: boolean) => void
   selected: boolean
   onToggleSelect: () => void
   balance: BalanceResponse | null
@@ -51,6 +54,7 @@ function formatLastUsed(lastUsedAt: string | null): string {
 
 export function CredentialCard({
   credential,
+  cachedBalance,
   onViewBalance,
   selected,
   onToggleSelect,
@@ -59,13 +63,19 @@ export function CredentialCard({
 }: CredentialCardProps) {
   const [editingPriority, setEditingPriority] = useState(false)
   const [priorityValue, setPriorityValue] = useState(String(credential.priority))
+  const [editingRegion, setEditingRegion] = useState(false)
+  const [regionValue, setRegionValue] = useState(credential.region ?? '')
+  const [apiRegionValue, setApiRegionValue] = useState(credential.apiRegion ?? '')
+  const [editingEndpoint, setEditingEndpoint] = useState(false)
+  const [endpointValue, setEndpointValue] = useState(credential.endpoint ?? '')
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
 
   const setDisabled = useSetDisabled()
   const setPriority = useSetPriority()
+  const setRegion = useSetRegion()
+  const setEndpoint = useSetEndpoint()
   const resetFailure = useResetFailure()
-  const deleteCredential = useDeleteCredential()
-  const forceRefresh = useForceRefreshToken()
+  const forceRefreshToken = useForceRefreshToken()
 
   const handleToggleDisabled = () => {
     setDisabled.mutate(
@@ -101,6 +111,43 @@ export function CredentialCard({
     )
   }
 
+  const handleRegionChange = () => {
+    setRegion.mutate(
+      {
+        id: credential.id,
+        region: regionValue.trim() || null,
+        apiRegion: apiRegionValue.trim() || null,
+      },
+      {
+        onSuccess: (res) => {
+          toast.success(res.message)
+          setEditingRegion(false)
+        },
+        onError: (err) => {
+          toast.error('操作失败: ' + (err as Error).message)
+        },
+      }
+    )
+  }
+
+  const handleEndpointChange = () => {
+    setEndpoint.mutate(
+      {
+        id: credential.id,
+        endpoint: endpointValue || null,
+      },
+      {
+        onSuccess: (res) => {
+          toast.success(res.message)
+          setEditingEndpoint(false)
+        },
+        onError: (err) => {
+          toast.error('操作失败: ' + (err as Error).message)
+        },
+      }
+    )
+  }
+
   const handleReset = () => {
     resetFailure.mutate(credential.id, {
       onSuccess: (res) => {
@@ -113,7 +160,7 @@ export function CredentialCard({
   }
 
   const handleForceRefresh = () => {
-    forceRefresh.mutate(credential.id, {
+    forceRefreshToken.mutate(credential.id, {
       onSuccess: (res) => {
         toast.success(res.message)
       },
@@ -141,9 +188,33 @@ export function CredentialCard({
     })
   }
 
+  // 格式化缓存时间（相对时间）
+  const formatCacheAge = (cachedAt: number) => {
+    const now = Date.now()
+    const diff = now - cachedAt
+    const seconds = Math.floor(diff / 1000)
+    if (seconds < 60) return `${seconds}秒前`
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}分钟前`
+    return `${Math.floor(minutes / 60)}小时前`
+  }
+
+  // 检查缓存是否过期（使用后端返回的 TTL）
+  const isCacheStale = () => {
+    if (!cachedBalance) return true
+    const ageMs = Date.now() - cachedBalance.cachedAt
+    const ttlMs = (cachedBalance.ttlSecs ?? 60) * 1000
+    return ageMs > ttlMs
+  }
+
+  const handleViewBalance = () => {
+    onViewBalance(credential.id, isCacheStale())
+  }
+
+
   return (
     <>
-      <Card className={credential.isCurrent ? 'ring-2 ring-primary' : ''}>
+      <Card>
         <CardHeader className="pb-2">
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-start gap-2 min-w-0 flex-wrap">
@@ -236,6 +307,11 @@ export function CredentialCard({
               <span className={credential.failureCount > 0 ? 'text-red-500 font-medium' : ''}>
                 {credential.failureCount}
               </span>
+              {credential.refreshFailureCount > 0 && (
+                <span className="ml-2 text-amber-600 font-medium">
+                  刷新 {credential.refreshFailureCount}
+                </span>
+              )}
             </div>
             <div>
               <span className="text-muted-foreground">刷新失败：</span>
@@ -248,7 +324,7 @@ export function CredentialCard({
               <span className="font-medium">
                 {loadingBalance ? (
                   <Loader2 className="inline w-3 h-3 animate-spin" />
-                ) : balance?.subscriptionTitle || '未知'}
+                ) : balance?.subscriptionTitle ?? cachedBalance?.subscriptionTitle ?? credential.subscriptionTitle ?? '未知'}
               </span>
             </div>
             <div>
@@ -265,8 +341,14 @@ export function CredentialCard({
                 <span className="font-mono font-medium break-all">{credential.maskedApiKey}</span>
               </div>
             )}
+            {credential.disabledReason && (
+              <div className="col-span-2">
+                <span className="text-muted-foreground">禁用原因：</span>
+                <span className="font-medium">{credential.disabledReason}</span>
+              </div>
+            )}
             <div className="col-span-2">
-              <span className="text-muted-foreground">剩余用量：</span>
+              <span className="text-muted-foreground">余额：</span>
               {loadingBalance ? (
                 <span className="text-sm ml-1">
                   <Loader2 className="inline w-3 h-3 animate-spin" /> 加载中...
@@ -276,6 +358,20 @@ export function CredentialCard({
                   {balance.remaining.toFixed(2)} / {balance.usageLimit.toFixed(2)}
                   <span className="text-xs text-muted-foreground ml-1">
                     ({(100 - balance.usagePercentage).toFixed(1)}% 剩余)
+                  </span>
+                </span>
+              ) : cachedBalance && cachedBalance.ttlSecs > 0 && cachedBalance.usageLimit > 0 ? (
+                <span className="font-medium ml-1">
+                  {cachedBalance.remaining.toFixed(2)} / {cachedBalance.usageLimit.toFixed(2)}
+                  <span className="text-xs text-muted-foreground ml-1">
+                    ({(100 - cachedBalance.usagePercentage).toFixed(1)}% 剩余, {formatCacheAge(cachedBalance.cachedAt)}缓存)
+                  </span>
+                </span>
+              ) : cachedBalance && cachedBalance.ttlSecs > 0 ? (
+                <span className="font-medium ml-1">
+                  ${cachedBalance.remaining.toFixed(2)}
+                  <span className="text-xs text-muted-foreground ml-1">
+                    ({formatCacheAge(cachedBalance.cachedAt)}缓存)
                   </span>
                 </span>
               ) : (
@@ -288,6 +384,114 @@ export function CredentialCard({
                 <span className="font-medium">{credential.proxyUrl}</span>
               </div>
             )}
+            <div className="col-span-2">
+              <span className="text-muted-foreground">Endpoint：</span>
+              {editingEndpoint ? (
+                <div className="inline-flex items-center gap-1 ml-1 flex-wrap">
+                  <select
+                    value={endpointValue}
+                    onChange={(e) => setEndpointValue(e.target.value)}
+                    className="flex h-7 rounded-md border border-input bg-background px-2 py-1 text-sm"
+                  >
+                    <option value="">默认值</option>
+                    <option value="ide">ide</option>
+                    <option value="cli">cli</option>
+                  </select>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-7 p-0"
+                    onClick={handleEndpointChange}
+                    disabled={setEndpoint.isPending}
+                  >
+                    ✓
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-7 p-0"
+                    onClick={() => {
+                      setEditingEndpoint(false)
+                      setEndpointValue(credential.endpoint ?? '')
+                    }}
+                  >
+                    ✕
+                  </Button>
+                </div>
+              ) : (
+                <span
+                  className="font-medium cursor-pointer hover:underline ml-1"
+                  onClick={() => {
+                    setEndpointValue(credential.endpoint ?? '')
+                    setEditingEndpoint(true)
+                  }}
+                >
+                  {credential.endpoint || '默认值'}
+                  <span className="text-xs text-muted-foreground ml-1">
+                    (生效: {credential.effectiveEndpoint})
+                  </span>
+                  <span className="text-xs text-muted-foreground ml-1">(点击编辑)</span>
+                </span>
+              )}
+            </div>
+            {/* Region 配置 */}
+            <div className="col-span-2">
+              <span className="text-muted-foreground">Region：</span>
+              {editingRegion ? (
+                <div className="inline-flex items-center gap-1 ml-1 flex-wrap">
+                  <Input
+                    placeholder="Region（留空清除）"
+                    value={regionValue}
+                    onChange={(e) => setRegionValue(e.target.value)}
+                    className="w-32 h-7 text-sm"
+                  />
+                  <Input
+                    placeholder="API Region（可选）"
+                    value={apiRegionValue}
+                    onChange={(e) => setApiRegionValue(e.target.value)}
+                    className="w-36 h-7 text-sm"
+                  />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-7 p-0"
+                    onClick={handleRegionChange}
+                    disabled={setRegion.isPending}
+                  >
+                    ✓
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-7 p-0"
+                    onClick={() => {
+                      setEditingRegion(false)
+                      setRegionValue(credential.region ?? '')
+                      setApiRegionValue(credential.apiRegion ?? '')
+                    }}
+                  >
+                    ✕
+                  </Button>
+                </div>
+              ) : (
+                <span
+                  className="font-medium cursor-pointer hover:underline ml-1"
+                  onClick={() => {
+                    setRegionValue(credential.region ?? '')
+                    setApiRegionValue(credential.apiRegion ?? '')
+                    setEditingRegion(true)
+                  }}
+                >
+                  {credential.region || '全局默认'}
+                  {credential.apiRegion && (
+                    <span className="text-muted-foreground ml-1">
+                      / API: {credential.apiRegion}
+                    </span>
+                  )}
+                  <span className="text-xs text-muted-foreground ml-1">(点击编辑)</span>
+                </span>
+              )}
+            </div>
             {credential.hasProfileArn && (
               <div className="col-span-2">
                 <Badge variant="secondary">有 Profile ARN</Badge>
@@ -310,10 +514,10 @@ export function CredentialCard({
               size="sm"
               variant="outline"
               onClick={handleForceRefresh}
-              disabled={forceRefresh.isPending || credential.disabled || credential.authMethod === 'api_key'}
+              disabled={forceRefreshToken.isPending || credential.disabled || credential.authMethod === 'api_key'}
               title={credential.authMethod === 'api_key' ? 'API Key 凭据无需刷新 Token' : credential.disabled ? '已禁用的凭据无法刷新 Token' : '强制刷新 Token'}
             >
-              <RefreshCw className={`h-4 w-4 mr-1 ${forceRefresh.isPending ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-4 w-4 mr-1 ${forceRefreshToken.isPending ? 'animate-spin' : ''}`} />
               刷新 Token
             </Button>
             <Button
@@ -355,7 +559,7 @@ export function CredentialCard({
             <Button
               size="sm"
               variant="default"
-              onClick={() => onViewBalance(credential.id)}
+              onClick={handleViewBalance}
             >
               <Wallet className="h-4 w-4 mr-1" />
               查看余额

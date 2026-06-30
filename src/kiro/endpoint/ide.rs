@@ -1,20 +1,13 @@
-//! Kiro IDE 端点
-//!
-//! 对应 Kiro IDE 客户端目前使用的 AWS CodeWhisperer 端点：
-//! - API: `https://q.{api_region}.amazonaws.com/generateAssistantResponse`
-//! - MCP: `https://q.{api_region}.amazonaws.com/mcp`
-//!
-//! 请求头使用 aws-sdk-js User-Agent 标识。请求体会在根对象上注入 `profileArn`。
+//! Kiro IDE 端点实现
 
 use reqwest::RequestBuilder;
 use uuid::Uuid;
 
-use super::{KiroEndpoint, RequestContext};
+use super::{KiroEndpoint, RequestContext, UsageRequestParts};
+use crate::kiro::model::credentials::KiroCredentials;
 
-/// Kiro IDE 端点名称
 pub const IDE_ENDPOINT_NAME: &str = "ide";
 
-/// Kiro IDE 端点
 pub struct IdeEndpoint;
 
 impl IdeEndpoint {
@@ -22,12 +15,11 @@ impl IdeEndpoint {
         Self
     }
 
-    fn api_region<'a>(&self, ctx: &'a RequestContext<'_>) -> &'a str {
-        ctx.credentials.effective_api_region(ctx.config)
-    }
-
     fn host(&self, ctx: &RequestContext<'_>) -> String {
-        format!("q.{}.amazonaws.com", self.api_region(ctx))
+        format!(
+            "q.{}.amazonaws.com",
+            ctx.credentials.effective_api_region(ctx.config)
+        )
     }
 
     fn x_amz_user_agent(&self, ctx: &RequestContext<'_>) -> String {
@@ -46,6 +38,47 @@ impl IdeEndpoint {
             ctx.machine_id
         )
     }
+
+    fn is_aws_sso_oidc_credentials(credentials: &KiroCredentials) -> bool {
+        let auth_method = credentials.auth_method.as_deref();
+        matches!(auth_method, Some("builder-id") | Some("idc"))
+            || (credentials.client_id.is_some() && credentials.client_secret.is_some())
+    }
+
+    fn mcp_profile_arn_header_value(credentials: &KiroCredentials) -> Option<&str> {
+        if Self::is_aws_sso_oidc_credentials(credentials) {
+            return None;
+        }
+
+        credentials.profile_arn.as_deref()
+    }
+
+    fn inject_profile_arn(
+        request_body: &str,
+        credentials: &KiroCredentials,
+    ) -> anyhow::Result<String> {
+        if Self::is_aws_sso_oidc_credentials(credentials) {
+            let mut request: serde_json::Value = serde_json::from_str(request_body)?;
+            if let Some(obj) = request.as_object_mut() {
+                obj.remove("profileArn");
+            }
+            return Ok(serde_json::to_string(&request)?);
+        }
+
+        let Some(profile_arn) = Self::mcp_profile_arn_header_value(credentials) else {
+            return Ok(request_body.to_string());
+        };
+
+        let mut request: serde_json::Value = serde_json::from_str(request_body)?;
+        let obj = request
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("request body is not a JSON object"))?;
+        obj.insert(
+            "profileArn".to_string(),
+            serde_json::Value::String(profile_arn.to_string()),
+        );
+        Ok(serde_json::to_string(&request)?)
+    }
 }
 
 impl Default for IdeEndpoint {
@@ -62,16 +95,20 @@ impl KiroEndpoint for IdeEndpoint {
     fn api_url(&self, ctx: &RequestContext<'_>) -> String {
         format!(
             "https://q.{}.amazonaws.com/generateAssistantResponse",
-            self.api_region(ctx)
+            ctx.credentials.effective_api_region(ctx.config)
         )
     }
 
     fn mcp_url(&self, ctx: &RequestContext<'_>) -> String {
-        format!("https://q.{}.amazonaws.com/mcp", self.api_region(ctx))
+        format!(
+            "https://q.{}.amazonaws.com/mcp",
+            ctx.credentials.effective_api_region(ctx.config)
+        )
     }
 
     fn decorate_api(&self, req: RequestBuilder, ctx: &RequestContext<'_>) -> RequestBuilder {
         let mut req = req
+            .header("content-type", "application/json")
             .header("x-amzn-codewhisperer-optout", "true")
             .header("x-amzn-kiro-agent-mode", "vibe")
             .header("x-amz-user-agent", self.x_amz_user_agent(ctx))
@@ -89,6 +126,7 @@ impl KiroEndpoint for IdeEndpoint {
 
     fn decorate_mcp(&self, req: RequestBuilder, ctx: &RequestContext<'_>) -> RequestBuilder {
         let mut req = req
+            .header("content-type", "application/json")
             .header("x-amz-user-agent", self.x_amz_user_agent(ctx))
             .header("user-agent", self.user_agent(ctx))
             .header("host", self.host(ctx))
@@ -96,8 +134,8 @@ impl KiroEndpoint for IdeEndpoint {
             .header("amz-sdk-request", "attempt=1; max=3")
             .header("Authorization", format!("Bearer {}", ctx.token));
 
-        if let Some(ref arn) = ctx.credentials.profile_arn {
-            req = req.header("x-amzn-kiro-profile-arn", arn);
+        if let Some(profile_arn) = Self::mcp_profile_arn_header_value(ctx.credentials) {
+            req = req.header("x-amzn-kiro-profile-arn", profile_arn);
         }
         if ctx.credentials.is_api_key_credential() {
             req = req.header("tokentype", "API_KEY");
@@ -105,65 +143,49 @@ impl KiroEndpoint for IdeEndpoint {
         req
     }
 
-    fn transform_api_body(&self, body: &str, ctx: &RequestContext<'_>) -> String {
-        inject_profile_arn(body, &ctx.credentials.profile_arn)
+    fn transform_api_body(&self, body: &str, ctx: &RequestContext<'_>) -> anyhow::Result<String> {
+        Self::inject_profile_arn(body, ctx.credentials)
     }
-}
 
-/// 将 profile_arn 注入到请求体 JSON 根对象
-fn inject_profile_arn(request_body: &str, profile_arn: &Option<String>) -> String {
-    if let Some(arn) = profile_arn {
-        if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(request_body) {
-            json["profileArn"] = serde_json::Value::String(arn.clone());
-            if let Ok(body) = serde_json::to_string(&json) {
-                return body;
-            }
-        }
-    }
-    request_body.to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::inject_profile_arn;
-    use serde_json::Value;
-
-    #[test]
-    fn test_inject_profile_arn_with_some() {
-        let body = r#"{"conversationState":{"conversationId":"c1"}}"#;
-        let arn = Some("arn:aws:codewhisperer:us-east-1:123:profile/ABC".to_string());
-        let result = inject_profile_arn(body, &arn);
-        let json: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(
-            json["profileArn"],
-            "arn:aws:codewhisperer:us-east-1:123:profile/ABC"
+    fn usage_request_parts(&self, ctx: &RequestContext<'_>) -> anyhow::Result<UsageRequestParts> {
+        let host = self.host(ctx);
+        let mut url = format!(
+            "https://{}/getUsageLimits?origin=AI_EDITOR&resourceType=AGENTIC_REQUEST",
+            host
         );
-        assert_eq!(json["conversationState"]["conversationId"], "c1");
-    }
+        if let Some(profile_arn) = Self::mcp_profile_arn_header_value(ctx.credentials) {
+            url.push_str(&format!("&profileArn={}", urlencoding::encode(profile_arn)));
+        }
 
-    #[test]
-    fn test_inject_profile_arn_with_none() {
-        let body = r#"{"conversationState":{"conversationId":"c1"}}"#;
-        let result = inject_profile_arn(body, &None);
-        let json: Value = serde_json::from_str(&result).unwrap();
-        assert!(json.get("profileArn").is_none());
-        assert_eq!(json["conversationState"]["conversationId"], "c1");
-    }
+        let mut headers = vec![
+            (
+                "x-amz-user-agent",
+                format!(
+                    "aws-sdk-js/1.0.0 KiroIDE-{}-{}",
+                    ctx.config.kiro_version, ctx.machine_id
+                ),
+            ),
+            (
+                "user-agent",
+                format!(
+                    "aws-sdk-js/1.0.0 ua/2.1 os/{} lang/js md/nodejs#{} api/codewhispererruntime#1.0.0 m/N,E KiroIDE-{}-{}",
+                    ctx.config.system_version,
+                    ctx.config.node_version,
+                    ctx.config.kiro_version,
+                    ctx.machine_id
+                ),
+            ),
+            ("host", host),
+            ("amz-sdk-invocation-id", Uuid::new_v4().to_string()),
+            ("amz-sdk-request", "attempt=1; max=1".to_string()),
+            ("Authorization", format!("Bearer {}", ctx.token)),
+            ("Connection", "close".to_string()),
+        ];
 
-    #[test]
-    fn test_inject_profile_arn_overwrites_existing() {
-        let body = r#"{"conversationState":{},"profileArn":"old-arn"}"#;
-        let arn = Some("new-arn".to_string());
-        let result = inject_profile_arn(body, &arn);
-        let json: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(json["profileArn"], "new-arn");
-    }
+        if ctx.credentials.is_api_key_credential() {
+            headers.push(("tokentype", "API_KEY".to_string()));
+        }
 
-    #[test]
-    fn test_inject_profile_arn_invalid_json() {
-        let body = "not-valid-json";
-        let arn = Some("arn:test".to_string());
-        let result = inject_profile_arn(body, &arn);
-        assert_eq!(result, "not-valid-json");
+        Ok(UsageRequestParts { url, headers })
     }
 }

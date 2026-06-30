@@ -10,6 +10,7 @@ use serde::Deserialize;
 pub struct UsageLimitsResponse {
     /// 下次重置日期 (Unix 时间戳)
     #[serde(default)]
+    #[allow(dead_code)]
     pub next_date_reset: Option<f64>,
 
     /// 订阅信息
@@ -37,15 +38,16 @@ pub struct SubscriptionInfo {
 pub struct UsageBreakdown {
     /// 当前使用量
     #[serde(default)]
+    #[allow(dead_code)]
     pub current_usage: i64,
 
     /// 当前使用量（精确值）
     #[serde(default)]
     pub current_usage_with_precision: f64,
 
-    /// 奖励额度列表
+    /// 奖励额度列表（可能为 null）
     #[serde(default)]
-    pub bonuses: Vec<Bonus>,
+    pub bonuses: Option<Vec<Bonus>>,
 
     /// 免费试用信息
     #[serde(default)]
@@ -53,10 +55,12 @@ pub struct UsageBreakdown {
 
     /// 下次重置日期 (Unix 时间戳)
     #[serde(default)]
+    #[allow(dead_code)]
     pub next_date_reset: Option<f64>,
 
     /// 使用限额
     #[serde(default)]
+    #[allow(dead_code)]
     pub usage_limit: i64,
 
     /// 使用限额（精确值）
@@ -82,11 +86,11 @@ pub struct Bonus {
 }
 
 impl Bonus {
-    /// 检查 bonus 是否处于激活状态
+    /// 检查 bonus 是否处于激活状态（大小写不敏感）
     pub fn is_active(&self) -> bool {
         self.status
             .as_deref()
-            .map(|s| s == "ACTIVE")
+            .map(|s| s.eq_ignore_ascii_case("ACTIVE"))
             .unwrap_or(false)
     }
 }
@@ -98,6 +102,7 @@ impl Bonus {
 pub struct FreeTrialInfo {
     /// 当前使用量
     #[serde(default)]
+    #[allow(dead_code)]
     pub current_usage: i64,
 
     /// 当前使用量（精确值）
@@ -106,6 +111,7 @@ pub struct FreeTrialInfo {
 
     /// 免费试用过期时间 (Unix 时间戳)
     #[serde(default)]
+    #[allow(dead_code)]
     pub free_trial_expiry: Option<f64>,
 
     /// 免费试用状态 (ACTIVE / EXPIRED)
@@ -114,6 +120,7 @@ pub struct FreeTrialInfo {
 
     /// 使用限额
     #[serde(default)]
+    #[allow(dead_code)]
     pub usage_limit: i64,
 
     /// 使用限额（精确值）
@@ -149,6 +156,7 @@ impl UsageLimitsResponse {
     /// 获取总使用限额（精确值）
     ///
     /// 累加基础额度、激活的免费试用额度和激活的奖励额度
+    #[allow(clippy::collapsible_if)]
     pub fn usage_limit(&self) -> f64 {
         let Some(breakdown) = self.primary_breakdown() else {
             return 0.0;
@@ -164,9 +172,11 @@ impl UsageLimitsResponse {
         }
 
         // 累加激活的 bonus 额度
-        for bonus in &breakdown.bonuses {
-            if bonus.is_active() {
-                total += bonus.usage_limit;
+        if let Some(bonuses) = &breakdown.bonuses {
+            for bonus in bonuses {
+                if bonus.is_active() {
+                    total += bonus.usage_limit;
+                }
             }
         }
 
@@ -176,6 +186,7 @@ impl UsageLimitsResponse {
     /// 获取总当前使用量（精确值）
     ///
     /// 累加基础使用量、激活的免费试用使用量和激活的奖励使用量
+    #[allow(clippy::collapsible_if)]
     pub fn current_usage(&self) -> f64 {
         let Some(breakdown) = self.primary_breakdown() else {
             return 0.0;
@@ -191,9 +202,11 @@ impl UsageLimitsResponse {
         }
 
         // 累加激活的 bonus 使用量
-        for bonus in &breakdown.bonuses {
-            if bonus.is_active() {
-                total += bonus.current_usage;
+        if let Some(bonuses) = &breakdown.bonuses {
+            for bonus in bonuses {
+                if bonus.is_active() {
+                    total += bonus.current_usage;
+                }
             }
         }
 

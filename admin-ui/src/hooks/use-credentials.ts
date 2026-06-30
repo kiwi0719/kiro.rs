@@ -1,17 +1,28 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import {
   getCredentials,
+  deleteCredential,
   setCredentialDisabled,
   setCredentialPriority,
+  setCredentialRegion,
+  setCredentialEndpoint,
   resetCredentialFailure,
   forceRefreshToken,
   getCredentialBalance,
+  getCachedBalances,
+  getCredentialAccountInfo,
   addCredential,
-  deleteCredential,
-  getLoadBalancingMode,
-  setLoadBalancingMode,
+  getCredentialStats,
+  resetCredentialStats,
+  resetAllStats,
+  importTokenJson,
+  getProxyConfig,
+  updateProxyConfig,
+  getGlobalConfig,
+  updateGlobalConfig,
 } from '@/api/credentials'
-import type { AddCredentialRequest } from '@/types/api'
+import type { AddCredentialRequest, ImportTokenJsonRequest, UpdateGlobalConfigRequest } from '@/types/api'
 
 // 查询凭据列表
 export function useCredentials() {
@@ -22,6 +33,18 @@ export function useCredentials() {
   })
 }
 
+// 强制刷新 Token
+export function useForceRefreshToken() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => forceRefreshToken(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+      queryClient.invalidateQueries({ queryKey: ['cached-balances'] })
+    },
+  })
+}
+
 // 查询凭据余额
 export function useCredentialBalance(id: number | null) {
   return useQuery({
@@ -29,6 +52,40 @@ export function useCredentialBalance(id: number | null) {
     queryFn: () => getCredentialBalance(id!),
     enabled: id !== null,
     retry: false, // 余额查询失败时不重试（避免重复请求被封禁的账号）
+  })
+}
+
+// 查询所有凭据的缓存余额（定时轮询，带退避策略）
+export function useCachedBalances() {
+  return useQuery({
+    queryKey: ['cached-balances'],
+    queryFn: getCachedBalances,
+    refetchInterval: (query) => (query.state.error ? 60000 : 30000),
+    refetchIntervalInBackground: false, // 页面不可见时暂停轮询
+  })
+}
+
+// 查询凭据账号信息（套餐/用量/邮箱等）
+export function useCredentialAccountInfo(id: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['credential-account', id],
+    queryFn: () => getCredentialAccountInfo(id!),
+    enabled: enabled && id !== null,
+    retry: false,
+  })
+}
+
+// 删除指定凭据
+export function useDeleteCredential() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => deleteCredential(id),
+    onSuccess: (_res, id) => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+      queryClient.invalidateQueries({ queryKey: ['credential-balance', id] })
+      queryClient.invalidateQueries({ queryKey: ['credential-account', id] })
+      queryClient.invalidateQueries({ queryKey: ['credential-stats', id] })
+    },
   })
 }
 
@@ -50,6 +107,30 @@ export function useSetPriority() {
   return useMutation({
     mutationFn: ({ id, priority }: { id: number; priority: number }) =>
       setCredentialPriority(id, priority),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+    },
+  })
+}
+
+// 设置 Region
+export function useSetRegion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, region, apiRegion }: { id: number; region: string | null; apiRegion: string | null }) =>
+      setCredentialRegion(id, region, apiRegion),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+    },
+  })
+}
+
+// 设置 endpoint
+export function useSetEndpoint() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, endpoint }: { id: number; endpoint: string | null }) =>
+      setCredentialEndpoint(id, endpoint),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
     },
@@ -89,32 +170,95 @@ export function useAddCredential() {
   })
 }
 
-// 删除凭据
-export function useDeleteCredential() {
+// 查询指定凭据统计
+export function useCredentialStats(id: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['credential-stats', id],
+    queryFn: () => getCredentialStats(id!),
+    enabled: enabled && id !== null,
+    retry: false,
+  })
+}
+
+// 清空指定凭据统计
+export function useResetCredentialStats() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: number) => deleteCredential(id),
-    onSuccess: () => {
+    mutationFn: (id: number) => resetCredentialStats(id),
+    onSuccess: (_res, id) => {
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
+      queryClient.invalidateQueries({ queryKey: ['credential-stats', id] })
     },
   })
 }
 
-// 获取负载均衡模式
-export function useLoadBalancingMode() {
-  return useQuery({
-    queryKey: ['loadBalancingMode'],
-    queryFn: getLoadBalancingMode,
+// 清空全部统计
+export function useResetAllStats() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => resetAllStats(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+      queryClient.invalidateQueries({ queryKey: ['credential-stats'] })
+    },
   })
 }
 
-// 设置负载均衡模式
-export function useSetLoadBalancingMode() {
+// 批量导入 token.json
+export function useImportTokenJson() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: setLoadBalancingMode,
+    mutationFn: (req: ImportTokenJsonRequest) => importTokenJson(req),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['loadBalancingMode'] })
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+      queryClient.invalidateQueries({ queryKey: ['cached-balances'] })
+    },
+  })
+}
+
+// 查询全局代理配置
+export function useProxyConfig() {
+  return useQuery({
+    queryKey: ['proxyConfig'],
+    queryFn: getProxyConfig,
+  })
+}
+
+// 更新全局代理配置
+export function useUpdateProxyConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: updateProxyConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['proxyConfig'] })
+      toast.success('全局代理配置已更新')
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.error?.message || '更新失败')
+    },
+  })
+}
+
+// 查询全局配置
+export function useGlobalConfig() {
+  return useQuery({
+    queryKey: ['globalConfig'],
+    queryFn: getGlobalConfig,
+  })
+}
+
+// 更新全局配置
+export function useUpdateGlobalConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: UpdateGlobalConfigRequest) => updateGlobalConfig(req),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['globalConfig'] })
+      queryClient.invalidateQueries({ queryKey: ['proxyConfig'] })
+      toast.success('全局配置已更新')
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.error?.message || '更新失败')
     },
   })
 }

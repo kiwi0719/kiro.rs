@@ -1,23 +1,27 @@
-import { useState, useEffect, useRef } from 'react'
-import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Trash2, RotateCcw, CheckCircle2, Settings, KeyRound } from 'lucide-react'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, FileUp, Trash2, RotateCcw, CheckCircle2, Globe, ArrowUp, ArrowDown, Settings, KeyRound } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { CredentialCard } from '@/components/credential-card'
 import { BalanceDialog } from '@/components/balance-dialog'
 import { AddCredentialDialog } from '@/components/add-credential-dialog'
-import { BatchImportDialog } from '@/components/batch-import-dialog'
-import { KamImportDialog } from '@/components/kam-import-dialog'
+import { ImportTokenJsonDialog } from '@/components/import-token-json-dialog'
 import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-dialog'
 import { AdminKeyDialog } from '@/components/admin-key-dialog'
 import { ClientKeyDialog } from '@/components/client-key-dialog'
-import { useCredentials, useDeleteCredential, useResetFailure, useLoadBalancingMode, useSetLoadBalancingMode } from '@/hooks/use-credentials'
-import { getCredentialBalance, forceRefreshToken } from '@/api/credentials'
+import { ProxyConfigDialog } from '@/components/proxy-config-dialog'
+import { GlobalConfigDialog } from '@/components/global-config-dialog'
+import { useCredentials, useCachedBalances, useDeleteCredential, useResetFailure, useForceRefreshToken, useProxyConfig, useGlobalConfig } from '@/hooks/use-credentials'
+import { getCredentialBalance } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import type { BalanceResponse } from '@/types/api'
+
+type SortField = 'default' | 'id' | 'balance'
+type SortOrder = 'asc' | 'desc'
 
 interface DashboardProps {
   onLogout: () => void
@@ -26,13 +30,17 @@ interface DashboardProps {
 export function Dashboard({ onLogout }: DashboardProps) {
   const [selectedCredentialId, setSelectedCredentialId] = useState<number | null>(null)
   const [balanceDialogOpen, setBalanceDialogOpen] = useState(false)
+  const [forceRefreshBalance, setForceRefreshBalance] = useState(false)
   const [addDialogOpen, setAddDialogOpen] = useState(false)
   const [batchImportDialogOpen, setBatchImportDialogOpen] = useState(false)
   const [kamImportDialogOpen, setKamImportDialogOpen] = useState(false)
   const [adminKeyDialogOpen, setAdminKeyDialogOpen] = useState(false)
   const [clientKeyDialogOpen, setClientKeyDialogOpen] = useState(false)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [verifyDialogOpen, setVerifyDialogOpen] = useState(false)
+  const [proxyConfigDialogOpen, setProxyConfigDialogOpen] = useState(false)
+  const [globalConfigDialogOpen, setGlobalConfigDialogOpen] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [verifyProgress, setVerifyProgress] = useState({ current: 0, total: 0 })
   const [verifyResults, setVerifyResults] = useState<Map<number, VerifyResult>>(new Map())
@@ -44,6 +52,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [batchRefreshProgress, setBatchRefreshProgress] = useState({ current: 0, total: 0 })
   const cancelVerifyRef = useRef(false)
   const [currentPage, setCurrentPage] = useState(1)
+  const [sortField, setSortField] = useState<SortField>('default')
+  const [sortOrder, setSortOrder] = useState<SortOrder>('asc')
   const itemsPerPage = 12
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -54,16 +64,41 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
   const queryClient = useQueryClient()
   const { data, isLoading, error, refetch } = useCredentials()
+  const { data: cachedBalancesData } = useCachedBalances()
   const { mutate: deleteCredential } = useDeleteCredential()
   const { mutate: resetFailure } = useResetFailure()
-  const { data: loadBalancingData, isLoading: isLoadingMode } = useLoadBalancingMode()
-  const { mutate: setLoadBalancingMode, isPending: isSettingMode } = useSetLoadBalancingMode()
+  const { mutate: forceRefreshToken } = useForceRefreshToken()
+  const { data: proxyConfig } = useProxyConfig()
+  const { data: globalConfig } = useGlobalConfig()
+
+  // 构建 id -> cachedBalance 的映射
+  const cachedBalanceMap = new Map(
+    cachedBalancesData?.balances.map((b) => [b.id, b]) ?? []
+  )
+
+  // 排序后的凭据列表
+  const sortedCredentials = useMemo(() => {
+    const credentials = data?.credentials || []
+    if (sortField === 'default') return credentials
+
+    return [...credentials].sort((a, b) => {
+      let cmp = 0
+      if (sortField === 'id') {
+        cmp = a.id - b.id
+      } else if (sortField === 'balance') {
+        const balA = cachedBalanceMap.get(a.id)?.remaining ?? -Infinity
+        const balB = cachedBalanceMap.get(b.id)?.remaining ?? -Infinity
+        cmp = balA - balB
+      }
+      return sortOrder === 'asc' ? cmp : -cmp
+    })
+  }, [data?.credentials, sortField, sortOrder, cachedBalanceMap])
 
   // 计算分页
-  const totalPages = Math.ceil((data?.credentials.length || 0) / itemsPerPage)
+  const totalPages = Math.ceil(sortedCredentials.length / itemsPerPage)
   const startIndex = (currentPage - 1) * itemsPerPage
   const endIndex = startIndex + itemsPerPage
-  const currentCredentials = data?.credentials.slice(startIndex, endIndex) || []
+  const currentCredentials = sortedCredentials.slice(startIndex, endIndex)
   const disabledCredentialCount = data?.credentials.filter(credential => credential.disabled).length || 0
   const selectedDisabledCount = Array.from(selectedIds).filter(id => {
     const credential = data?.credentials.find(c => c.id === id)
@@ -114,8 +149,13 @@ export function Dashboard({ onLogout }: DashboardProps) {
     document.documentElement.classList.toggle('dark')
   }
 
-  const handleViewBalance = (id: number) => {
+  const handleViewBalance = (id: number, forceRefresh: boolean) => {
     setSelectedCredentialId(id)
+    setForceRefreshBalance(forceRefresh)
+    if (forceRefresh) {
+      // 清除该凭据的余额缓存，强制重新获取
+      queryClient.invalidateQueries({ queryKey: ['credential-balance', id] })
+    }
     setBalanceDialogOpen(true)
   }
 
@@ -128,6 +168,18 @@ export function Dashboard({ onLogout }: DashboardProps) {
     storage.removeApiKey()
     queryClient.clear()
     onLogout()
+  }
+
+  // 排序切换
+  const handleSortChange = (field: SortField) => {
+    if (field === sortField) {
+      // 同一字段：切换方向
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortField(field)
+      setSortOrder(field === 'balance' ? 'desc' : 'asc')
+    }
+    setCurrentPage(1)
   }
 
   // 选择管理
@@ -211,7 +263,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
     const failedIds = Array.from(selectedIds).filter(id => {
       const cred = data?.credentials.find(c => c.id === id)
-      return cred && cred.failureCount > 0
+      return cred && (cred.failureCount > 0 || cred.refreshFailureCount > 0)
     })
 
     if (failedIds.length === 0) {
@@ -275,10 +327,20 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
     for (let i = 0; i < enabledIds.length; i++) {
       try {
-        await forceRefreshToken(enabledIds[i])
-        successCount++
+        await new Promise<void>((resolve, reject) => {
+          forceRefreshToken(enabledIds[i], {
+            onSuccess: () => {
+              successCount++
+              resolve()
+            },
+            onError: () => {
+              failCount++
+              reject(new Error('refresh failed'))
+            }
+          })
+        })
       } catch {
-        failCount++
+        // noop
       }
       setBatchRefreshProgress({ current: i + 1, total: enabledIds.length })
     }
@@ -495,22 +557,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
     setVerifying(false)
   }
 
-  // 切换负载均衡模式
-  const handleToggleLoadBalancing = () => {
-    const currentMode = loadBalancingData?.mode || 'priority'
-    const newMode = currentMode === 'priority' ? 'balanced' : 'priority'
-
-    setLoadBalancingMode(newMode, {
-      onSuccess: () => {
-        const modeName = newMode === 'priority' ? '优先级模式' : '均衡负载模式'
-        toast.success(`已切换到${modeName}`)
-      },
-      onError: (error) => {
-        toast.error(`切换失败: ${extractErrorMessage(error)}`)
-      }
-    })
-  }
-
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -549,15 +595,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
             <span className="font-semibold">Kiro Admin</span>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleToggleLoadBalancing}
-              disabled={isLoadingMode || isSettingMode}
-              title="切换负载均衡模式"
-            >
-              {isLoadingMode ? '加载中...' : (loadBalancingData?.mode === 'priority' ? '优先级模式' : '均衡负载')}
-            </Button>
             <Button variant="ghost" size="icon" onClick={toggleDarkMode}>
               {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </Button>
@@ -603,16 +640,21 @@ export function Dashboard({ onLogout }: DashboardProps) {
               <div className="text-2xl font-bold text-green-600">{data?.available || 0}</div>
             </CardContent>
           </Card>
-          <Card>
+          <Card
+            className="cursor-pointer hover:border-primary/50 transition-colors"
+            onClick={() => setGlobalConfigDialogOpen(true)}
+          >
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                当前活跃
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
+                <Globe className="h-4 w-4" />
+                全局配置
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold flex items-center gap-2">
-                #{data?.currentId || '-'}
-                <Badge variant="success">活跃</Badge>
+              <div className="text-xs space-y-0.5">
+                <div className="truncate">{globalConfig?.region || '-'} | RPM: {globalConfig?.credentialRpm ?? '默认'}</div>
+                <div className="truncate">Endpoint: {globalConfig?.defaultEndpoint || 'ide'} | 压缩: {globalConfig?.compression.enabled ? '开' : '关'}</div>
+                <div className="truncate">代理: {proxyConfig?.proxyUrl || '无'}</div>
               </div>
             </CardContent>
           </Card>
@@ -623,6 +665,32 @@ export function Dashboard({ onLogout }: DashboardProps) {
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-4 shrink-0">
               <h2 className="text-xl font-semibold whitespace-nowrap">凭据管理</h2>
+              {/* 排序控件 */}
+              <div className="flex items-center gap-1">
+                {([
+                  ['default', '默认'],
+                  ['id', 'ID'],
+                  ['balance', '余额'],
+                ] as const).map(([field, label]) => {
+                  const active = sortField === field
+                  return (
+                    <Button
+                      key={field}
+                      size="sm"
+                      variant={active ? 'secondary' : 'ghost'}
+                      className="h-7 px-2 text-xs"
+                      onClick={() => handleSortChange(field)}
+                    >
+                      {label}
+                      {active && field !== 'default' && (
+                        sortOrder === 'asc'
+                          ? <ArrowUp className="h-3 w-3 ml-0.5" />
+                          : <ArrowDown className="h-3 w-3 ml-0.5" />
+                      )}
+                    </Button>
+                  )
+                })}
+              </div>
               {selectedIds.size > 0 && (
                 <div className="flex items-center gap-2 shrink-0">
                   <Badge variant="secondary" className="whitespace-nowrap">已选择 {selectedIds.size} 个</Badge>
@@ -694,13 +762,9 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   清除已禁用
                 </Button>
               )}
-              <Button onClick={() => setKamImportDialogOpen(true)} size="sm" variant="outline">
-                <FileUp className="h-4 w-4 mr-2" />
-                Kiro Account Manager 导入
-              </Button>
-              <Button onClick={() => setBatchImportDialogOpen(true)} size="sm" variant="outline">
+              <Button variant="outline" onClick={() => setImportDialogOpen(true)} size="sm">
                 <Upload className="h-4 w-4 mr-2" />
-                批量导入
+                导入凭据
               </Button>
               <Button onClick={() => setClientKeyDialogOpen(true)} size="sm" variant="outline">
                 <KeyRound className="h-4 w-4 mr-2" />
@@ -725,6 +789,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   <CredentialCard
                     key={credential.id}
                     credential={credential}
+                    cachedBalance={cachedBalanceMap.get(credential.id)}
                     onViewBalance={handleViewBalance}
                     selected={selectedIds.has(credential.id)}
                     onToggleSelect={() => toggleSelect(credential.id)}
@@ -767,7 +832,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
       <BalanceDialog
         credentialId={selectedCredentialId}
         open={balanceDialogOpen}
-        onOpenChange={setBalanceDialogOpen}
+        onOpenChange={(open) => {
+          setBalanceDialogOpen(open)
+          if (!open) {
+            setForceRefreshBalance(false)
+            // 关闭弹窗时刷新缓存余额，让卡片显示最新数据
+            queryClient.invalidateQueries({ queryKey: ['cached-balances'] })
+          }
+        }}
+        forceRefresh={forceRefreshBalance}
       />
 
       {/* 添加凭据对话框 */}
@@ -776,17 +849,24 @@ export function Dashboard({ onLogout }: DashboardProps) {
         onOpenChange={setAddDialogOpen}
       />
 
-      {/* 批量导入对话框 */}
-      <BatchImportDialog
-        open={batchImportDialogOpen}
-        onOpenChange={setBatchImportDialogOpen}
+      {/* 导入凭据对话框 */}
+      <ImportTokenJsonDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
       />
 
-      {/* KAM 账号导入对话框 */}
-      <KamImportDialog
-        open={kamImportDialogOpen}
-        onOpenChange={setKamImportDialogOpen}
+      {/* 全局配置对话框 */}
+      <GlobalConfigDialog
+        open={globalConfigDialogOpen}
+        onOpenChange={setGlobalConfigDialogOpen}
       />
+
+      {/* 全局代理配置对话框（保留兼容） */}
+      <ProxyConfigDialog
+        open={proxyConfigDialogOpen}
+        onOpenChange={setProxyConfigDialogOpen}
+      />
+
 
       {/* 批量验活对话框 */}
       <BatchVerifyDialog

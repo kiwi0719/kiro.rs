@@ -3,12 +3,22 @@ import { storage } from '@/lib/storage'
 import type {
   CredentialsStatusResponse,
   BalanceResponse,
+  CachedBalancesResponse,
   SuccessResponse,
   SetDisabledRequest,
   SetPriorityRequest,
+  SetEndpointRequest,
   AddCredentialRequest,
   AddCredentialResponse,
   ApiKeyResponse,
+  CredentialStatsResponse,
+  CredentialAccountInfoResponse,
+  ImportTokenJsonRequest,
+  ImportTokenJsonResponse,
+  ProxyConfigResponse,
+  UpdateProxyConfigRequest,
+  GlobalConfigResponse,
+  UpdateGlobalConfigRequest,
 } from '@/types/api'
 
 // 创建 axios 实例
@@ -66,10 +76,33 @@ export async function resetCredentialFailure(
   return data
 }
 
-// 强制刷新 Token
-export async function forceRefreshToken(
-  id: number
+// 设置凭据 Region
+export async function setCredentialRegion(
+  id: number,
+  region: string | null,
+  apiRegion: string | null
 ): Promise<SuccessResponse> {
+  const { data } = await api.post<SuccessResponse>(`/credentials/${id}/region`, {
+    region: region || null,
+    apiRegion: apiRegion || null,
+  })
+  return data
+}
+
+// 设置凭据 endpoint
+export async function setCredentialEndpoint(
+  id: number,
+  endpoint: string | null
+): Promise<SuccessResponse> {
+  const { data } = await api.post<SuccessResponse>(
+    `/credentials/${id}/endpoint`,
+    { endpoint } as SetEndpointRequest
+  )
+  return data
+}
+
+// 强制刷新 Token
+export async function forceRefreshToken(id: number): Promise<SuccessResponse> {
   const { data } = await api.post<SuccessResponse>(`/credentials/${id}/refresh`)
   return data
 }
@@ -77,6 +110,20 @@ export async function forceRefreshToken(
 // 获取凭据余额
 export async function getCredentialBalance(id: number): Promise<BalanceResponse> {
   const { data } = await api.get<BalanceResponse>(`/credentials/${id}/balance`)
+  return data
+}
+
+// 获取所有凭据的缓存余额
+export async function getCachedBalances(): Promise<CachedBalancesResponse> {
+  const { data } = await api.get<CachedBalancesResponse>('/credentials/balances/cached')
+  return data
+}
+
+// 获取凭据账号信息（套餐/用量/邮箱等）
+export async function getCredentialAccountInfo(
+  id: number
+): Promise<CredentialAccountInfoResponse> {
+  const { data } = await api.get<CredentialAccountInfoResponse>(`/credentials/${id}/account`)
   return data
 }
 
@@ -94,15 +141,56 @@ export async function deleteCredential(id: number): Promise<SuccessResponse> {
   return data
 }
 
-// 获取负载均衡模式
-export async function getLoadBalancingMode(): Promise<{ mode: 'priority' | 'balanced' }> {
-  const { data } = await api.get<{ mode: 'priority' | 'balanced' }>('/config/load-balancing')
+// 获取指定凭据统计
+export async function getCredentialStats(id: number): Promise<CredentialStatsResponse> {
+  const { data } = await api.get<CredentialStatsResponse>(`/credentials/${id}/stats`)
   return data
 }
 
-// 设置负载均衡模式
-export async function setLoadBalancingMode(mode: 'priority' | 'balanced'): Promise<{ mode: 'priority' | 'balanced' }> {
-  const { data } = await api.put<{ mode: 'priority' | 'balanced' }>('/config/load-balancing', { mode })
+// 清空指定凭据统计
+export async function resetCredentialStats(id: number): Promise<SuccessResponse> {
+  const { data } = await api.post<SuccessResponse>(`/credentials/${id}/stats/reset`)
+  return data
+}
+
+// 清空全部统计
+export async function resetAllStats(): Promise<SuccessResponse> {
+  const { data } = await api.post<SuccessResponse>('/stats/reset')
+  return data
+}
+
+// 批量导入 token.json
+export async function importTokenJson(
+  req: ImportTokenJsonRequest
+): Promise<ImportTokenJsonResponse> {
+  const { data } = await api.post<ImportTokenJsonResponse>(
+    '/credentials/import-token-json',
+    req
+  )
+  return data
+}
+
+// 获取全局代理配置
+export async function getProxyConfig(): Promise<ProxyConfigResponse> {
+  const { data } = await api.get<ProxyConfigResponse>('/proxy')
+  return data
+}
+
+// 更新全局代理配置
+export async function updateProxyConfig(req: UpdateProxyConfigRequest): Promise<SuccessResponse> {
+  const { data } = await api.post<SuccessResponse>('/proxy', req)
+  return data
+}
+
+// 获取全局配置
+export async function getGlobalConfig(): Promise<GlobalConfigResponse> {
+  const { data } = await api.get<GlobalConfigResponse>('/config/global')
+  return data
+}
+
+// 更新全局配置
+export async function updateGlobalConfig(req: UpdateGlobalConfigRequest): Promise<SuccessResponse> {
+  const { data } = await api.put<SuccessResponse>('/config/global', req)
   return data
 }
 

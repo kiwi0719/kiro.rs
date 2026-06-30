@@ -9,8 +9,9 @@ use axum::{
 use super::{
     middleware::AdminState,
     types::{
-        AddCredentialRequest, ApiKeyResponse, SetDisabledRequest, SetLoadBalancingModeRequest,
-        SetPriorityRequest, SuccessResponse, UpdateApiKeyRequest,
+        AddCredentialRequest, ApiKeyResponse, ImportTokenJsonRequest, SetDisabledRequest,
+        SetEndpointRequest, SetPriorityRequest, SetRegionRequest, SuccessResponse,
+        UpdateApiKeyRequest, UpdateProxyConfigRequest,
     },
 };
 
@@ -54,6 +55,39 @@ pub async fn set_credential_priority(
     }
 }
 
+/// POST /api/admin/credentials/:id/region
+/// 设置凭据 Region
+pub async fn set_credential_region(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+    Json(payload): Json<SetRegionRequest>,
+) -> impl IntoResponse {
+    match state
+        .service
+        .set_region(id, payload.region, payload.api_region)
+    {
+        Ok(_) => Json(SuccessResponse::new(format!("凭据 #{} Region 已更新", id))).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/credentials/:id/endpoint
+/// 设置凭据 endpoint
+pub async fn set_credential_endpoint(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+    Json(payload): Json<SetEndpointRequest>,
+) -> impl IntoResponse {
+    match state.service.set_endpoint(id, payload.endpoint) {
+        Ok(_) => Json(SuccessResponse::new(format!(
+            "凭据 #{} endpoint 已更新",
+            id
+        )))
+        .into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
 /// POST /api/admin/credentials/:id/reset
 /// 重置失败计数并重新启用
 pub async fn reset_failure_count(
@@ -63,6 +97,22 @@ pub async fn reset_failure_count(
     match state.service.reset_and_enable(id) {
         Ok(_) => Json(SuccessResponse::new(format!(
             "凭据 #{} 失败计数已重置并重新启用",
+            id
+        )))
+        .into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/credentials/:id/refresh
+/// 强制刷新指定凭据 Token
+pub async fn force_refresh_token(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+) -> impl IntoResponse {
+    match state.service.force_refresh_token(id).await {
+        Ok(_) => Json(SuccessResponse::new(format!(
+            "凭据 #{} Token 已强制刷新",
             id
         )))
         .into_response(),
@@ -80,6 +130,12 @@ pub async fn get_credential_balance(
         Ok(response) => Json(response).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
+}
+
+/// GET /api/admin/credentials/balances/cached
+/// 获取所有凭据的缓存余额
+pub async fn get_cached_balances(State(state): State<AdminState>) -> impl IntoResponse {
+    Json(state.service.get_cached_balances())
 }
 
 /// POST /api/admin/credentials
@@ -106,37 +162,45 @@ pub async fn delete_credential(
     }
 }
 
-/// POST /api/admin/credentials/:id/refresh
-/// 强制刷新凭据 Token
-pub async fn force_refresh_token(
+/// POST /api/admin/credentials/import-token-json
+/// 批量导入 token.json
+pub async fn import_token_json(
     State(state): State<AdminState>,
-    Path(id): Path<u64>,
+    Json(payload): Json<ImportTokenJsonRequest>,
 ) -> impl IntoResponse {
-    match state.service.force_refresh_token(id).await {
-        Ok(_) => Json(SuccessResponse::new(format!(
-            "凭据 #{} Token 已强制刷新",
-            id
-        )))
-        .into_response(),
+    let response = state.service.import_token_json(payload).await;
+    Json(response)
+}
+
+/// GET /proxy - 获取全局代理配置
+pub async fn get_proxy_config(State(state): State<AdminState>) -> impl IntoResponse {
+    Json(state.service.get_proxy_config())
+}
+
+/// POST /proxy - 更新全局代理配置
+pub async fn update_proxy_config(
+    State(state): State<AdminState>,
+    Json(req): Json<UpdateProxyConfigRequest>,
+) -> impl IntoResponse {
+    match state.service.update_proxy_config(req).await {
+        Ok(_) => Json(SuccessResponse::new("全局代理配置已更新")).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }
 
-/// GET /api/admin/config/load-balancing
-/// 获取负载均衡模式
-pub async fn get_load_balancing_mode(State(state): State<AdminState>) -> impl IntoResponse {
-    let response = state.service.get_load_balancing_mode();
+/// GET /api/admin/config/global - 获取全局配置
+pub async fn get_global_config(State(state): State<AdminState>) -> impl IntoResponse {
+    let response = state.service.get_global_config();
     Json(response)
 }
 
-/// PUT /api/admin/config/load-balancing
-/// 设置负载均衡模式
-pub async fn set_load_balancing_mode(
+/// PUT /api/admin/config/global - 更新全局配置
+pub async fn update_global_config(
     State(state): State<AdminState>,
-    Json(payload): Json<SetLoadBalancingModeRequest>,
+    Json(req): Json<super::types::UpdateGlobalConfigRequest>,
 ) -> impl IntoResponse {
-    match state.service.set_load_balancing_mode(payload) {
-        Ok(response) => Json(response).into_response(),
+    match state.service.update_global_config(req).await {
+        Ok(_) => Json(SuccessResponse::new("全局配置已更新")).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }
